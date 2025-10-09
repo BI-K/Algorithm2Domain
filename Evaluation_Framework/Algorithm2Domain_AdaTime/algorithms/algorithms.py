@@ -40,6 +40,7 @@ class Algorithm(torch.nn.Module):
         best_src_risk = float('inf')
         best_model = None
 
+        print("NUMBER OF EPOCHS:", self.hparams["num_epochs"])
         for epoch in range(1, self.hparams["num_epochs"] + 1):
             
             # training loop 
@@ -105,7 +106,8 @@ class NO_ADAPT(Algorithm):
 
     def training_epoch(self,src_loader, trg_loader, avg_meter, epoch):
         for src_x, src_y in src_loader:
-            
+
+
             src_x, src_y = src_x.to(self.device), src_y.to(self.device)
             src_feat = self.feature_extractor(src_x)
             src_pred = self.classifier(src_feat)

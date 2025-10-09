@@ -8,6 +8,7 @@ from .resnet18 import resnet18
 
 from .liquid_time_constant_network import LTCN, CfCN
 from .hinrichs_models import GRUHinrichs, TransformerHinrichs
+from .swift import LSTM
 # from utils import weights_init
 
 def get_backbone_class(backbone_name):
@@ -29,7 +30,7 @@ class CNN(nn.Module):
         self.conv_block1 = nn.Sequential(
             nn.Conv1d(configs.input_channels, configs.mid_channels, kernel_size=configs.kernel_size,
                       stride=configs.stride, bias=False, padding=(configs.kernel_size // 2)),
-            nn.BatchNorm1d(configs.mid_channels),
+            nn.BatchNorm1d(configs.mid_channels, eps=1e-5),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
             nn.Dropout(configs.dropout)
@@ -37,7 +38,7 @@ class CNN(nn.Module):
 
         self.conv_block2 = nn.Sequential(
             nn.Conv1d(configs.mid_channels, configs.mid_channels * 2, kernel_size=8, stride=1, bias=False, padding=4),
-            nn.BatchNorm1d(configs.mid_channels * 2),
+            nn.BatchNorm1d(configs.mid_channels * 2, eps=1e-5),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2, stride=2, padding=1)
         )
@@ -45,20 +46,25 @@ class CNN(nn.Module):
         self.conv_block3 = nn.Sequential(
             nn.Conv1d(configs.mid_channels * 2, configs.final_out_channels, kernel_size=8, stride=1, bias=False,
                       padding=4),
-            nn.BatchNorm1d(configs.final_out_channels),
+            nn.BatchNorm1d(configs.final_out_channels, eps=1e-5),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
         )
 
         self.adaptive_pool = nn.AdaptiveAvgPool1d(configs.features_len)
 
-    def forward(self, x_in):
-        x = self.conv_block1(x_in)
-        x = self.conv_block2(x)
-        x = self.conv_block3(x)
-        x = self.adaptive_pool(x.to('cpu') if x.is_mps else x).to(x.device)
+    def forward(self, x_in): # x_in contains nans sometimes - if it is an entire channel
+        #print("Input:", x_in[:5])
+        x = self.conv_block1(x_in) # all nan
+        #print("After conv_block1:", x[:5])
+        x = self.conv_block2(x) # all nan
+        #print("After conv_block2:", x[:5])
+        x = self.conv_block3(x) # all nan
+        #print("After conv_block3:", x[:5])
+        x = self.adaptive_pool(x.to('cpu') if x.is_mps else x).to(x.device) # all nan
+        #print("After adaptive_pool:", x[:5])
 
-        x_flat = x.reshape(x.shape[0], -1)
+        x_flat = x.reshape(x.shape[0], -1) # already all nan
         return x_flat
 
 

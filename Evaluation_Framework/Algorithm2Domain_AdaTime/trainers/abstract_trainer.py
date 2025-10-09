@@ -11,11 +11,11 @@ import warnings
 import sklearn.exceptions
 import collections
 
-from torchmetrics import Accuracy, AUROC, F1Score
+from torchmetrics import Accuracy, AUROC, F1Score, Recall, Specificity
 from ..dataloader.dataloader import data_generator, few_shot_data_generator
 from ..configs.data_model_configs import get_dataset_class
 from ..configs.hparams import get_hparams_class
-from ..configs.sweep_params import sweep_alg_hparams
+from ..configs.sweep_params import sweep_alg_hparams, get_sweep_model_hparams
 from ..utils import fix_randomness, starting_logs, DictAsObject,AverageMeter
 from ..algorithms.algorithms import get_algorithm_class
 from ..models.models import get_backbone_class
@@ -31,6 +31,7 @@ class AbstractTrainer(object):
 
         self.da_method = args.da_method  # Selected  DA Method
         self.dataset = args.dataset  # Selected  Dataset
+
         self.backbone = args.backbone
         self.device = torch.device(args.device)  # device
 
@@ -53,39 +54,62 @@ class AbstractTrainer(object):
         # get dataset and base model configs
         self.dataset_configs, self.hparams_class = self.get_configs()
 
+        self.scenario_string = ""
+        for (source, target) in self.dataset_configs.scenarios:
+            self.scenario_string += f"{source}_to_{target},"
+        self.scenario_string = self.scenario_string[:-1]  # Remove trailing comma and space
 
         # Perform validity checks on arguments - e.g. do not apply da methods for classification tasks to continuous prediction tasks
         # DSAN, 
         if self.dataset_configs.num_classes == 0 and self.da_method in ["DSAN"]:
             raise ValueError(f"{self.da_method} not applicable for continuous prediction tasks. Please select a different DA method.")
 
+        self.post_processing_classification = self.dataset_configs.post_processing_classification
+
         # to fix dimension of features in classifier and discriminator networks.
-        self.dataset_configs.final_out_channels = self.dataset_configs.tcn_final_out_channles if args.backbone == "TCN" else self.dataset_configs.final_out_channels
+        self.dataset_configs.final_out_channels = self.dataset_configs.tcn_final_out_channels if args.backbone == "TCN" else self.dataset_configs.final_out_channels
         # to fix dimension of first linear layer in TransformerHinrichs 
         self.dataset_configs.batch_size = self.hparams_class.train_params["batch_size"]
 
         # Specify number of hparams
         self.hparams = {**self.hparams_class.alg_hparams[self.da_method],
                                 **self.hparams_class.train_params}
-        
+    
 
         # metrics
         self.num_cont_output_channels = self.dataset_configs.num_cont_output_channels
         self.num_classes = self.dataset_configs.num_classes
-        if self.num_classes > 0:
+        if self.num_cont_output_channels == 0:
             self.ACC = Accuracy(task="multiclass", num_classes=self.num_classes)
             self.F1 = F1Score(task="multiclass", num_classes=self.num_classes, average="macro")
+            self.Sensitivity = Recall(task="multiclass", num_classes=self.num_classes, average="macro")
+            self.Specificity = Specificity(task="multiclass", num_classes=self.num_classes, average="macro")
             self.AUROC = AUROC(task="multiclass", num_classes=self.num_classes) 
             self.MSE = 0   
             self.RMSE = 0
             self.MAPE = 0
         else:
-            self.ACC = 0
-            self.F1 = 0
-            self.AUROC = 0   
+            self.ACC = Accuracy(task="multiclass", num_classes=self.num_classes)
+            self.F1 = F1Score(task="multiclass", num_classes=self.num_classes, average="macro")
+            self.AUROC = AUROC(task="multiclass", num_classes=self.num_classes) 
+            self.Sensitivity = Recall(task="multiclass", num_classes=self.num_classes, average="macro")
+            self.Specificity = Specificity(task="multiclass", num_classes=self.num_classes, average="macro")
             self.MSE = torch.nn.MSELoss()
             self.RMSE = lambda x,y : torch.sqrt(self.MSE(x,y))
             self.MAPE = lambda x, y: torch.mean(torch.abs((x - y) / torch.where(y == 0, torch.ones_like(y), y))) * 100
+
+        self.all_results = []
+
+        self.results_columns = ["scenario", "run", "source_acc", "source_f1_score", "source_auroc", "source_sensitvity", "source_specificity",
+                                "target_acc", "target_f1_score", "target_auroc", "target_sensitvity", "target_specificity"] 
+        self.results_columns += ["source_mse_" + str(i) for i in range(self.num_cont_output_channels)] 
+        self.results_columns += ["source_rmse_" + str(i) for i in range(self.num_cont_output_channels)]
+        self.results_columns += ["source_mape_" + str(i) for i in range(self.num_cont_output_channels)] 
+        self.results_columns +=  ["target_mse_" + str(i) for i in range(self.num_cont_output_channels)] 
+        self.results_columns +=  ["target_rmse_" + str(i) for i in range(self.num_cont_output_channels)] 
+        self.results_columns +=  ["target_mape_" + str(i) for i in range(self.num_cont_output_channels)] 
+        self.results_columns +=  ["src_risk", "few_shot_risk", "trg_risk"]
+
 
     def sweep(self):
         # sweep configurations
@@ -121,6 +145,54 @@ class AbstractTrainer(object):
         self.last_model, self.best_model = self.algorithm.update(self.src_train_dl, self.trg_train_dl, self.loss_avg_meters, self.logger)
         return self.last_model, self.best_model
     
+
+    def create_results_table(self, src_id, trg_id, run_id, on_all_target=False):
+        # calculate metrics and risks
+        metrics_source = self.calculate_metrics(for_target=False)
+        if on_all_target:
+            metrics_target = self.calculate_metrics(for_target=False, for_all_target=True)
+        else:
+            metrics_target = self.calculate_metrics(for_target=True)
+        risks = self.calculate_risks()
+
+
+        # Table.add_data
+        result_entry = {
+            "scenario" : f"{src_id}_to_{trg_id}",
+            "run": run_id,
+            "target_acc": metrics_target[0],
+            "target_f1_score": metrics_target[1],
+            "target_auroc": metrics_target[2],
+            "target_sensitvity": metrics_target[3],
+            "target_specificity": metrics_target[4],
+            "source_acc": metrics_source[0],
+            "source_f1_score": metrics_source[1],
+            "source_auroc": metrics_source[2],
+            "source_sensitvity": metrics_source[3],
+            "source_specificity": metrics_source[4],
+            "src_risk": risks[0],
+            "few_shot_risk": risks[1],
+            "trg_risk": risks[2]
+        }
+        for i in range(self.num_cont_output_channels):
+            # target
+            result_entry[f"target_mse_{i}"] = metrics_target[5 + i]
+            result_entry[f"target_rmse_{i}"] = metrics_target[5 + self.num_cont_output_channels + i]
+            result_entry[f"target_mape_{i}"] = metrics_target[5 + 2 * self.num_cont_output_channels + i]
+
+            # source
+            result_entry[f"source_mse_{i}"] = metrics_source[5 + i]
+            result_entry[f"source_rmse_{i}"] = metrics_source[5 + self.num_cont_output_channels + i]
+            result_entry[f"source_mape_{i}"] = metrics_source[5 + 2 * self.num_cont_output_channels + i]
+
+        # order results correctly
+        results_entry_as_list = []
+        for column in self.results_columns:
+            results_entry_as_list.append(result_entry[column])
+
+        self.all_results.append(results_entry_as_list)
+        return results_entry_as_list, risks
+
     def evaluate(self, test_loader):
         feature_extractor = self.algorithm.feature_extractor.to(self.device)
         classifier = self.algorithm.classifier.to(self.device)
@@ -135,7 +207,7 @@ class AbstractTrainer(object):
         with torch.no_grad():
             for data, labels in test_loader:
                 data = data.float().to(self.device)
-                if self.num_classes > 0:
+                if self.num_cont_output_channels == 0:
                     labels = labels.long().to(self.device)
                 else:
                     labels = labels.float().to(self.device)
@@ -149,7 +221,7 @@ class AbstractTrainer(object):
 
 
                 # compute loss
-                if self.num_classes > 0:
+                if self.num_cont_output_channels == 0:
                     loss = F.cross_entropy(predictions, labels)
                 else:
                     labels = labels.view(labels.size(0), -1)  # flatten labels to match predictions
@@ -176,6 +248,7 @@ class AbstractTrainer(object):
 
         self.trg_train_dl = data_generator(self.data_path, trg_id, self.dataset_configs, self.hparams, "train", is_source=True)     
         self.trg_test_dl = data_generator(self.data_path, trg_id, self.dataset_configs, self.hparams, "test", is_source=True)
+        self.trg_all = data_generator(self.data_path, trg_id, self.dataset_configs, self.hparams, "all", is_source=False)
 
         self.few_shot_dl_5 = few_shot_data_generator(self.trg_test_dl, self.dataset_configs,
                                                      5)  # set 5 to other value if you want other k-shot FST
@@ -200,8 +273,6 @@ class AbstractTrainer(object):
         # f1_torch
         f1 = self.F1(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
         auroc = self.AUROC(self.full_preds.cpu(), self.full_labels.cpu()).item()
-        # f1_sk learn
-        # f1 = f1_score(self.full_preds.argmax(dim=1).cpu().numpy(), self.full_labels.cpu().numpy(), average='macro')
         mse = self.MSE(self.full_preds.cpu(), self.full_labels.cpu()).item()
         rmse = self.RMSE(self.full_preds.cpu(), self.full_labels.cpu()).item()
         mape = self.MAPE(self.full_preds.cpu(), self.full_labels.cpu()).item()
@@ -259,37 +330,66 @@ class AbstractTrainer(object):
 
     def wandb_logging(self, total_results, total_risks, summary_metrics, summary_risks):
         # log wandb
-        wandb.log({'results': total_results})
+        wandb.log({'total_results': total_results})
         wandb.log({'risks': total_risks})
         wandb.log({'hparams': wandb.Table(dataframe=pd.DataFrame(dict(self.hparams).items(), columns=['parameter', 'value']), allow_mixed_types=True)})
         wandb.log(summary_metrics)
         wandb.log(summary_risks)
 
-    def calculate_metrics(self):
-       
-        self.evaluate(self.trg_test_dl)
-        if self.num_classes > 0:
+    def calculate_metrics(self, for_target=True, for_all_target=False):
+
+        if for_target:
+            self.evaluate(self.trg_test_dl)
+        elif for_all_target:
+            self.evaluate(self.trg_all)
+        else:
+            self.evaluate(self.src_test_dl)
+
+        if self.num_cont_output_channels == 0:
             # accuracy  
             acc = self.ACC(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
             # f1
             f1 = self.F1(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
             # auroc 
             auroc = self.AUROC(self.full_preds.cpu(), self.full_labels.cpu()).item()
+            sensitvity = self.Sensitivity(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
+            specificity = self.Specificity(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
+             # mse, rmse, mape
 
             mses = [0 for _ in range(self.num_cont_output_channels)]
             rmses = [0 for _ in range(self.num_cont_output_channels)]
             mapes = [0 for _ in range(self.num_cont_output_channels)]
             
         else:
-            acc = 0
-            f1 = 0
-            auroc = 0
-            self.full_labels = self.full_labels.squeeze(1)  # remove the second dimension
+
+            if self.num_cont_output_channels > 1:
+                self.full_labels = self.full_labels.squeeze(1)  # remove the second dimension
+
+            if self.post_processing_classification:
+                # apply postprocessing to self.full_preds and self.full_labels
+
+                full_preds_classified = postprocess(self.full_preds)
+                full_labels_classified = postprocess(self.full_labels)
+                # add dimension to full_labels_classified
+                acc = self.ACC(full_preds_classified.argmax(dim=1).cpu(), full_labels_classified.argmax(dim=1).cpu()).item()
+                f1 = self.F1(full_preds_classified.argmax(dim=1).cpu(), full_labels_classified.argmax(dim=1).cpu()).item()
+                sensitvity = self.Sensitivity(full_preds_classified.argmax(dim=1).cpu(), full_labels_classified.argmax(dim=1).cpu()).item()
+                specificity = self.Specificity(full_preds_classified.argmax(dim=1).cpu(), full_labels_classified.argmax(dim=1).cpu()).item()
+                full_preds_classified = full_preds_classified.long()
+                full_labels_classified = full_labels_classified.long()
+                auroc = self.AUROC(full_preds_classified.float().cpu(), full_labels_classified.argmax(dim=1).cpu()).item()
+            else:
+                acc = 0
+                f1 = 0
+                auroc = 0
+                sensitvity = 0
+                specificity = 0
+
             mses = [self.MSE(self.full_preds[:, i].cpu(), self.full_labels[:,  i].cpu()).item() for i in range(self.num_cont_output_channels)]
             rmses = [self.RMSE(self.full_preds[:, i].cpu(), self.full_labels[:,  i].cpu()).item() for i in range(self.num_cont_output_channels)]
             mapes = [self.MAPE(self.full_preds[:, i].cpu(), self.full_labels[:,  i].cpu()).item() for i in range(self.num_cont_output_channels)]
 
-        return acc, f1, auroc, *mses, *rmses, *mapes
+        return acc, f1, auroc, sensitvity, specificity, *mses, *rmses, *mapes
 
     def calculate_risks(self):
          # calculation based source test data
@@ -307,7 +407,10 @@ class AbstractTrainer(object):
     def append_results_to_tables(self, table, scenario, run_id, metrics):
 
         # Create metrics and risks rows
-        results_row = [scenario, run_id, *metrics]
+        if scenario is None or run_id is None or metrics is None:
+            results_row = [*metrics]
+        else:
+            results_row = [scenario, run_id, *metrics]
 
         # Create new dataframes for each row
         results_df = pd.DataFrame([results_row], columns=table.columns)

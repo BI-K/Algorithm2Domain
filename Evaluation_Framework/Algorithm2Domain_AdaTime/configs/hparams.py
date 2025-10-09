@@ -407,7 +407,7 @@ class WEATHER():
     def __init__(self):
         super(WEATHER, self).__init__()
         self.train_params = {
-            "num_epochs": 10,
+            "num_epochs": 1,
             "batch_size": 32,
             "weight_decay": 1e-4,
             "step_size": 50,
@@ -712,14 +712,14 @@ class PHD():
     def __init__(self):
         super().__init__()
         self.train_params = {
-            'num_epochs': 1,
-            'batch_size': 32,
-            'weight_decay': 1e-4,
-            'step_size': 50,
+            'batch_size': 1024,
+            'num_epochs': 90,
+            'step_size': 5,
+            'weight_decay': 0.0001,
             'lr_decay': 0.5
         }
         self.alg_hparams = {
-            'NO_ADAPT': {'learning_rate': 1e-3, 'src_cls_loss_wt': 1},
+            'NO_ADAPT': {'learning_rate': 0.035938, 'src_cls_loss_wt': 1},
             'TARGET_ONLY': {'learning_rate': 1e-3, 'trg_cls_loss_wt': 1},
             "SASA": {
                 "domain_loss_wt": 0.7821851095870519,

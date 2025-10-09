@@ -13,8 +13,9 @@ import collections
 import argparse
 import warnings
 import sklearn.exceptions
+import json
 
-from ..configs.sweep_params import sweep_alg_hparams
+from ..configs.sweep_params import sweep_alg_hparams, sweep_model_params, get_sweep_model_hparams, sweep_train_hparams
 from ..utils import fix_randomness, starting_logs, DictAsObject
 from ..algorithms.algorithms import get_algorithm_class
 from ..models.models import get_backbone_class
@@ -37,7 +38,8 @@ class Trainer(AbstractTrainer):
 
         # sweep parameters
         self.num_sweeps = args.num_sweeps
-        self.sweep_project_wandb = args.sweep_project_wandb
+        self.sweep_id = args.sweep_id
+        self.sweep_project_wandb =   self.dataset + '_' + self.scenario_string + '_' + self.backbone + '_' + self.da_method
         self.wandb_entity = args.wandb_entity
         self.hp_search_strategy = args.hp_search_strategy
         self.metric_to_minimize = args.metric_to_minimize
@@ -46,11 +48,50 @@ class Trainer(AbstractTrainer):
         self.exp_log_dir = os.path.join(self.home_path, self.save_dir)
         os.makedirs(self.exp_log_dir, exist_ok=True)
 
-        self.all_results = []
 
-        self.results_columns = ["scenario", "run", "acc", "f1_score", "auroc"] + ["mse_" + str(i) for i in range(self.num_cont_output_channels)] + ["rmse_" + str(i) for i in range(self.num_cont_output_channels)] + ["mape_" + str(i) for i in range(self.num_cont_output_channels)]
+    def load_json_config(self, file_path):
+        """Load a JSON configuration file."""
+        if not os.path.exists(file_path):
+            return {}
         
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            return {}
 
+    def load_dataset_creation_details(self):
+
+        # read json file with sweep parameters
+        scenario_creation_configs = {}
+        # please flatten list of lists to a list with singular elements
+        scenarios = []
+        for scen_1, scen_2 in self.dataset_configs.scenarios:
+            scenarios.append(scen_1)
+            scenarios.append(scen_2)
+
+        scenarios = list(set(scenarios))
+        for scenario in scenarios:
+            # base_config 
+            base_config_path = os.path.join(self.home_path, "ADATime_data", self.dataset, "details", scenario,  "base_config.json")
+            base_config = self.load_json_config(base_config_path)
+
+            # create_config
+            create_config_path = os.path.join(self.home_path, "ADATime_data", self.dataset, "details", scenario,  "create_config.json")
+            create_config = self.load_json_config(create_config_path)
+
+            # split_config
+            split_config_path = os.path.join(self.home_path, "ADATime_data", self.dataset, "details", scenario, "split_config.json")
+            split_config = self.load_json_config(split_config_path)
+
+            scenario_creation_configs[scenario] = {
+                "base_config": base_config,
+                "create_config": create_config,
+                "split_config": split_config
+            }
+
+
+        return scenario_creation_configs
 
     def sweep(self, dataset_configs=None, sweep_hparams=None, hparams=None):
         if dataset_configs is not None:
@@ -63,19 +104,33 @@ class Trainer(AbstractTrainer):
 
         if sweep_hparams is not None:
              sweep_alg_hparams = sweep_hparams
-        
+
+        model_sweep_hparams = {}
+        if self.backbone in sweep_model_params:
+            model_sweep_hparams = sweep_model_params[self.backbone]
+
+        scenario_creation_configs = self.load_dataset_creation_details()
+        data_augmentation_path = os.path.join(self.home_path, "Algorithm2Domain_AdaTime", "configs", "data_augmentation_configs.json")
+        data_augmentation_configs = self.load_json_config(data_augmentation_path)
+        #postprocessing_configs = self.load_json_config(os.path.join(self.home_path, "configs", "postprocessing_configs.json"))
+
+        # log info not loggable otherwise as freetext in description
+        # TODO add postprocessing
+        self.description = f"scenario_configs: {scenario_creation_configs}, data_augmentation: {data_augmentation_configs}"
         # sweep configurations
         sweep_runs_count = self.num_sweeps
-        print(f"Running {sweep_runs_count} sweeps")
         sweep_config = {
             'method': self.hp_search_strategy,
             'metric': {'name': self.metric_to_minimize, 'goal': 'minimize'},
-            'name': self.da_method + '_' + self.backbone,
-            'parameters': {**sweep_alg_hparams[self.da_method]}
+            'name': self.da_method + '_' + self.backbone + '_' + self.dataset,
+            'parameters': {**sweep_train_hparams, **sweep_alg_hparams[self.da_method], **model_sweep_hparams,
+                           }
         }
 
-        print(f"Sweep config: {sweep_config}")
-        sweep_id = wandb.sweep(sweep_config, project=self.sweep_project_wandb, entity=self.wandb_entity)
+        if self.sweep_id == '':
+            sweep_id = wandb.sweep(sweep_config, project=self.sweep_project_wandb, entity=self.wandb_entity)
+        else:
+            sweep_id = self.sweep_id
 
         wandb.agent(sweep_id, self.train, count=sweep_runs_count)
 
@@ -83,9 +138,13 @@ class Trainer(AbstractTrainer):
 
 
     def train(self):
-        run = wandb.init(config=self.hparams)
+
+        temp_config = {**self.hparams, **self.dataset_configs.to_dict()}
+        run = wandb.init(config=temp_config, notes=self.description)
         self.hparams = wandb.config
-        print(f"Running with config: {wandb.config}")
+
+        # merge self.dataset_configs with wandb.config
+        self.dataset_configs.update_configs(wandb.config)
 
         # create tables for results and risks
         columns = self.results_columns
@@ -107,37 +166,16 @@ class Trainer(AbstractTrainer):
 
                     # initiate the domain adaptation algorithm
                     self.initialize_algorithm()
-
                     # Train the domain adaptation algorithm
                     self.last_model, self.best_model = self.algorithm.update(self.src_train_dl, self.trg_train_dl, self.loss_avg_meters, self.logger)
 
-                    # calculate metrics and risks
-                    metrics = self.calculate_metrics()
-                    risks = self.calculate_risks()
-
-                    result_entry = {
-                        "scenario": f"{src_id}_to_{trg_id}",
-                        "src_id": src_id,
-                        "trg_id": trg_id,
-                        "run": run_id,
-                        "acc": metrics[0],
-                        "f1_score": metrics[1],
-                        "auroc": metrics[2],
-                        "src_risk": risks[0],
-                        "few_shot_risk": risks[1],
-                        "trg_risk": risks[2]
-                    }
-                    for i in range(self.num_cont_output_channels):
-                        result_entry[f"mse_{i}"] = metrics[3 + i]
-                        result_entry[f"rmse_{i}"] = metrics[self.num_cont_output_channels + i]
-                        result_entry[f"mape_{i}"] = metrics[2 * self.num_cont_output_channels + i]
-
-                    self.all_results.append(result_entry)
+                    results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
 
                     # append results to tables
                     scenario = f"{src_id}_to_{trg_id}"
-                    table_results.add_data(scenario, run_id, *metrics)
+                    table_results.add_data(*results_entry_as_list)
                     table_risks.add_data(scenario, run_id, *risks)
+
 
         # calculate overall metrics and risks
         total_results, summary_metrics = self.calculate_avg_std_wandb_table(table_results)
@@ -149,16 +187,10 @@ class Trainer(AbstractTrainer):
         # update hparams with the best results
         best_hparams = {key: wandb.config[key] for key in wandb.config.keys()}
         self.hparams = best_hparams
-
-        print(f"Total results: {total_results.get_dataframe()}")
-        print(f"Total risks: {total_risks.get_dataframe()}")
-        print(f"Best results: {summary_metrics}")
-        print(f"Best risks: {summary_risks}")
-
-        print("Completed current sweep run.")
+        self.dataset_configs.update_configs(wandb.config)
 
         # finish the run
         run.finish()
 
-        return total_results, total_risks, summary_metrics, summary_risks
+        return total_results, summary_metrics, total_risks, summary_risks
 
