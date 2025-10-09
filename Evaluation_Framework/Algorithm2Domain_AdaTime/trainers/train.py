@@ -30,7 +30,7 @@ class Trainer(AbstractTrainer):
     def __init__(self, args):
         super().__init__(args)
 
-        self.results_columns = ["scenario", "run", "acc", "f1_score", "auroc"] + ["mse_" + str(i) for i in range(self.num_cont_output_channels)] + ["rmse_" + str(i) for i in range(self.num_cont_output_channels)] + ["mape_" + str(i) for i in range(self.num_cont_output_channels)]
+        #self.results_columns = ["scenario", "run", "acc", "f1_score", "auroc"] + ["mse_" + str(i) for i in range(self.num_cont_output_channels)] + ["rmse_" + str(i) for i in range(self.num_cont_output_channels)] + ["mape_" + str(i) for i in range(self.num_cont_output_channels)]
         self.risks_columns = ["scenario", "run", "src_risk", "few_shot_risk", "trg_risk"]
 
 
@@ -75,13 +75,12 @@ class Trainer(AbstractTrainer):
                 # Save checkpoint
                 self.save_checkpoint(self.home_path, self.scenario_log_dir, self.last_model, self.best_model)
 
-                # Calculate risks and metrics
-                metrics = self.calculate_metrics()
-                risks = self.calculate_risks()
+                results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
+
 
                 # Append results to tables
                 scenario = f"{src_id}_to_{trg_id}"
-                table_results = self.append_results_to_tables(table_results, scenario, run_id, metrics)
+                table_results = self.append_results_to_tables(table_results, None, None, results_entry_as_list)
                 table_risks = self.append_results_to_tables(table_risks, scenario, run_id, risks)
 
         # Calculate and append mean and std to tables
@@ -93,7 +92,7 @@ class Trainer(AbstractTrainer):
         self.save_tables_to_file(table_results, 'results')
         self.save_tables_to_file(table_risks, 'risks')
 
-    def test(self, dataset_configs=None, hparams=None):
+    def test(self, test_on_all_target=True, dataset_configs=None, hparams=None):
         if dataset_configs is not None:
             self.dataset_configs = dataset_configs
         if hparams is not None:
@@ -125,28 +124,38 @@ class Trainer(AbstractTrainer):
                 last_chk, best_chk = self.load_checkpoint(self.scenario_log_dir)
                 # Testing the last model
                 self.algorithm.network.load_state_dict(last_chk)
-                self.evaluate(self.trg_test_dl)
-                last_metrics = self.calculate_metrics()
-                last_results = self.append_results_to_tables(last_results, f"{src_id}_to_{trg_id}", run_id,
-                                                             last_metrics)
-                
+
+                if test_on_all_target:
+                    results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id, on_all_target=True)
+                else:
+                    results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
+
+                # Append results to tables
+                scenario = f"{src_id}_to_{trg_id}"
+                last_results = self.append_results_to_tables(last_results, None, None, results_entry_as_list)
+
 
                 # Testing the best model
                 self.algorithm.network.load_state_dict(best_chk)
                 self.evaluate(self.trg_test_dl)
-                best_metrics = self.calculate_metrics()
+                results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
+
                 # Append results to tables
-                best_results = self.append_results_to_tables(best_results, f"{src_id}_to_{trg_id}", run_id,
-                                                             best_metrics)
-                
-        result_labels = ["acc", "f1_score", "auroc"] + [f"mse_{i}" for i in range(self.num_cont_output_channels)]
-        last_scenario_mean_std = last_results.groupby('scenario')[result_labels].agg(['mean', 'std'])
-        best_scenario_mean_std = best_results.groupby('scenario')[result_labels].agg(['mean', 'std'])
+                scenario = f"{src_id}_to_{trg_id}"
+                best_results = self.append_results_to_tables(best_results, None, None, results_entry_as_list)
+        
+        results_labels = self.results_columns[2:]  # Exclude 'scenario' and 'run' columns
+        last_scenario_mean_std = last_results.groupby('scenario')[results_labels].agg(['mean', 'std'])
+        best_scenario_mean_std = best_results.groupby('scenario')[results_labels].agg(['mean', 'std'])
 
 
         # Save tables to file if needed
-        self.save_tables_to_file(last_scenario_mean_std, 'last_results')
-        self.save_tables_to_file(best_scenario_mean_std, 'best_results')
+        if test_on_all_target:
+            self.save_tables_to_file(last_results, 'last_results_all_target')
+            self.save_tables_to_file(best_results, 'best_results_all_target')
+        else:
+            self.save_tables_to_file(last_results, 'last_results_test_target')
+            self.save_tables_to_file(best_results, 'best_results_test_target')
 
         # printing summary 
         summary_last = {metric: np.mean(last_results[metric]) for metric in self.results_columns[2:]}
@@ -156,3 +165,4 @@ class Trainer(AbstractTrainer):
                 print(f'{summary_name}: {key}\t: {val:2.4f}')
 
         return summary_best
+

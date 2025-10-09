@@ -10,3 +10,4 @@ experiments_logs/*
 wandb/*
 venv/
 venv310/
+ADATime/*

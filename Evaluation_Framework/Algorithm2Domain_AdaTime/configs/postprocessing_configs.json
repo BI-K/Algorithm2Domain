@@ -1,4 +1,5 @@
 {
+    "num_classes": 2,
     "postprocessing_steps": [
         {
             "output_channel": 0,
@@ -7,8 +8,8 @@
                 "step": 0,
                 "params": {
                     "intervals": [
-                        {"start": 0, "end": 10, "label": 0},
-                        {"start": 10, "end": 20, "label": 1}
+                        {"start": -1000, "end": 65, "label": 1},
+                        {"start": 65, "end": 1000, "label": 0}
                     ]
                 }
             }

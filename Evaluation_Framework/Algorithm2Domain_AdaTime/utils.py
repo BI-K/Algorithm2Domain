@@ -64,10 +64,10 @@ def _logger(logger_name, level=logging.DEBUG):
 
 
 def starting_logs(data_type, da_method, exp_log_dir, src_id, tgt_id, run_id):
-    log_dir = os.path.join(exp_log_dir, src_id + "_to_" + tgt_id + "_run_" + str(run_id))
+    log_dir = os.path.join(exp_log_dir, str(src_id) + "_to_" + str(tgt_id) + "_run_" + str(run_id))
     os.makedirs(log_dir, exist_ok=True)
     log_file_name = os.path.join(log_dir, f"logs_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.log")
-    logger = _logger(log_file_name)
+    logger = _logger(log_file_name, level=logging.WARNING)
     logger.debug("=" * 45)
     logger.debug(f'Dataset: {data_type}')
     logger.debug(f'Method:  {da_method}')
