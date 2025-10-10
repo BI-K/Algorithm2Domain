@@ -2,6 +2,14 @@
 
 This folder contains scripts that help you turn time-series datasets into the format required by the Algorithm2Domain Evaluation Framework.
 
+## Script to create your own datasets of the MIMIC III matched waveform v1.0
+
+- [MIMIC III matched waveform v1.0](https://physionet.org/content/mimic3wdb-matched/1.0/)
+- Moody, B., Moody, G., Villarroel, M., Clifford, G. D., & Silva, I. (2020). MIMIC-III Waveform Database Matched Subset (version 1.0). PhysioNet. RRID:SCR_007345. [https://doi.org/10.13026/c2294b](https://doi.org/10.13026/c2294b)
+- [Johnson, A. E. W., Pollard, T. J., Shen, L., Lehman, L. H., Feng, M., Ghassemi, M., Moody, B., Szolovits, P., Celi, L. A., & Mark, R. G. (2016). MIMIC-III, a freely accessible critical care database. Scientific Data, 3, 160035.](https://www.nature.com/articles/sdata201635)
+- [Goldberger, A., Amaral, L., Glass, L., Hausdorff, J., Ivanov, P. C., Mark, R., ... & Stanley, H. E. (2000). PhysioBank, PhysioToolkit, and PhysioNet: Components of a new research resource for complex physiologic signals. Circulation [Online]. 101 (23), pp. e215–e220. RRID:SCR_007345.]
+- probably easily adaptable to other online databases with WFDB adapter.
+
 ## Preprocessing Scripts for the following Datasets
 - [OHIOT1DM](https://webpages.charlotte.edu/rbunescu/data/ohiot1dm/OhioT1DM-dataset.html)
 - [WEATHER - Kaggle: Hourly energy demand generation and weather](https://www.kaggle.com/datasets/nicholasjhana/energy-consumption-generation-prices-and-weather?select=weather_features.csv)
