@@ -92,12 +92,17 @@ class Trainer(AbstractTrainer):
         self.save_tables_to_file(table_results, 'results')
         self.save_tables_to_file(table_risks, 'risks')
 
-    def test(self, test_on_all_target=True, dataset_configs=None, hparams=None):
+    def test(self, test_on_all_target=False, dataset_configs=None, hparams=None):
+
+        print("train.py - test - test_on_all_target:", test_on_all_target)
+
         if dataset_configs is not None:
             self.dataset_configs = dataset_configs
         if hparams is not None:
             # Merge the provided hparams with existing ones to preserve default values
             self.hparams.update(hparams)
+
+
 
         # Results dataframes
         last_results = pd.DataFrame(columns=self.results_columns)
@@ -125,10 +130,7 @@ class Trainer(AbstractTrainer):
                 # Testing the last model
                 self.algorithm.network.load_state_dict(last_chk)
 
-                if test_on_all_target:
-                    results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id, on_all_target=True)
-                else:
-                    results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
+                results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id, on_all_target=test_on_all_target)
 
                 # Append results to tables
                 scenario = f"{src_id}_to_{trg_id}"
@@ -138,7 +140,7 @@ class Trainer(AbstractTrainer):
                 # Testing the best model
                 self.algorithm.network.load_state_dict(best_chk)
                 self.evaluate(self.trg_test_dl)
-                results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id)
+                results_entry_as_list, risks = self.create_results_table(src_id, trg_id, run_id, on_all_target=test_on_all_target)
 
                 # Append results to tables
                 scenario = f"{src_id}_to_{trg_id}"

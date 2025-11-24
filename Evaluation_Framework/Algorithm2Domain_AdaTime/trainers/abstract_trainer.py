@@ -148,11 +148,11 @@ class AbstractTrainer(object):
 
     def create_results_table(self, src_id, trg_id, run_id, on_all_target=False):
         # calculate metrics and risks
-        metrics_source = self.calculate_metrics(for_target=False)
+        metrics_source = self.calculate_metrics(for_target=False, for_all_target=False)
         if on_all_target:
             metrics_target = self.calculate_metrics(for_target=False, for_all_target=True)
         else:
-            metrics_target = self.calculate_metrics(for_target=True)
+            metrics_target = self.calculate_metrics(for_target=True, for_all_target=False)
         risks = self.calculate_risks()
 
 
