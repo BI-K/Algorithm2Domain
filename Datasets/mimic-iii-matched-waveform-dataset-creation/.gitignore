@@ -1,6 +1,0 @@
-configs/create/*
-configs/split/*
-inputs/*
-outputs/*
-logs/*
-__pycache__/
